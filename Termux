@@ -1,35 +1,24 @@
 """
-BOT SNIPER VEX â€” VERSAO TERMINAL
-Roda no Ubuntu/Termux via tmux
-Sem interface grafica â€” 100% terminal
+BOT SNIPER VEX â€” VERSAO TERMINAL v2
+Corrigido: laravel_session + XSRF-TOKEN
 
 COMO USAR:
 1. Abre o Lemur, loga na VexInveste
 2. No console DevTools cola:
-   document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1]
-3. Copia o token
-4. No terminal cola:
-   python3 bot_terminal.py
-5. Cola o token quando pedir
-6. Bot liga sozinho
-
-PARA RODAR EM BACKGROUND:
-   tmux new -s bot
-   python3 bot_terminal.py
-   Ctrl+B depois D  (sai sem parar)
-   tmux attach -t bot  (para voltar)
+   document.cookie
+3. Copia o resultado completo
+4. Roda: python3 bot_terminal.py
+5. Cola o cookie completo quando pedir
 """
 
 import threading
 import requests
 import numpy as np
 import time
+import re
 from datetime import datetime
 from urllib.parse import unquote
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# CONFIGURACOES
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 SYMBOL      = "BTCUSDT"
 ACCOUNT_ID  = 7710
 AMOUNT      = 500
@@ -38,7 +27,6 @@ MAX_OPS_DIA = 6
 MIN_SCORE   = 3
 INTERVALO   = 5
 
-# Cores no terminal
 VERDE   = "\033[92m"
 VERM    = "\033[91m"
 AMARELO = "\033[93m"
@@ -46,45 +34,32 @@ AZUL    = "\033[94m"
 RESET   = "\033[0m"
 NEGRITO = "\033[1m"
 
-
 def log(msg, cor=RESET):
     agora = datetime.now().strftime("%H:%M:%S")
     print(f"{cor}[{agora}] {msg}{RESET}")
 
+def extrair_cookie(cookie_str, nome):
+    m = re.search(rf'{nome}=([^;]+)', cookie_str)
+    return m.group(1) if m else ""
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# DADOS DE MERCADO
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 def pegar_preco():
     try:
-        r = requests.get(
-            f"https://api.binance.com/api/v3/ticker/price?symbol={SYMBOL}",
-            timeout=4)
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={SYMBOL}", timeout=4)
         return float(r.json()["price"])
     except:
         try:
-            r = requests.get(
-                "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT",
-                timeout=4)
+            r = requests.get("https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT", timeout=4)
             return float(r.json()["data"]["price"])
         except:
             return None
 
-
 def pegar_candles(limit=120):
     try:
-        r = requests.get(
-            f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval=1m&limit={limit}",
-            timeout=5)
-        return [{"open": float(c[1]), "high": float(c[2]),
-                 "low":  float(c[3]), "close": float(c[4])} for c in r.json()]
+        r = requests.get(f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval=1m&limit={limit}", timeout=5)
+        return [{"open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4])} for c in r.json()]
     except:
         return []
 
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# INDICADORES
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 def calc_rsi(candles, period=14):
     if len(candles) < period + 1: return 50.0
     closes = [c["close"] for c in candles]
@@ -96,7 +71,6 @@ def calc_rsi(candles, period=14):
     if al == 0: return 100.0
     return round(100 - (100 / (1 + ag / al)), 1)
 
-
 def calc_stoch(candles, k=14):
     if len(candles) < k: return 50.0
     highs = [c["high"] for c in candles[-k:]]
@@ -106,10 +80,6 @@ def calc_stoch(candles, k=14):
     if hmax == lmin: return 50.0
     return round(((close - lmin) / (hmax - lmin)) * 100, 1)
 
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# ORDER BLOCKS
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 def detectar_obs(candles):
     bull, bear = [], []
     for i in range(2, len(candles) - 5):
@@ -118,15 +88,12 @@ def detectar_obs(candles):
         fmax = max(x["high"] for x in fut)
         fmin = min(x["low"]  for x in fut)
         if c["close"] < c["open"]:
-            move = (fmax - c["high"]) / c["high"]
-            if move > 0.003:
+            if (fmax - c["high"]) / c["high"] > 0.003:
                 bull.append({"topo": c["open"], "fundo": c["close"]})
         if c["close"] > c["open"]:
-            move = (c["low"] - fmin) / c["low"]
-            if move > 0.003:
+            if (c["low"] - fmin) / c["low"] > 0.003:
                 bear.append({"topo": c["close"], "fundo": c["open"]})
     return {"bull": bull[-4:], "bear": bear[-4:]}
-
 
 def em_ob(preco, obs, tol=0.001):
     for ob in obs:
@@ -134,10 +101,6 @@ def em_ob(preco, obs, tol=0.001):
             return True
     return False
 
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# LINHAS DE TENDENCIA
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 def pivot_highs(candles, w=5):
     pts = []
     for i in range(w, len(candles)-w):
@@ -146,7 +109,6 @@ def pivot_highs(candles, w=5):
            all(h >= candles[i+j]["high"] for j in range(1,w+1)):
             pts.append((i, h))
     return pts
-
 
 def pivot_lows(candles, w=5):
     pts = []
@@ -157,7 +119,6 @@ def pivot_lows(candles, w=5):
             pts.append((i, l))
     return pts
 
-
 def linha_tendencia(pontos, n):
     if len(pontos) < 2: return None, None
     pts = pontos[-3:]
@@ -166,15 +127,10 @@ def linha_tendencia(pontos, n):
     c   = np.polyfit(xs, ys, 1)
     return c[0] * n + c[1], c[0]
 
-
 def tocando(preco, valor, tol=0.0015):
     if valor is None: return False
     return abs(preco - valor) / valor <= tol
 
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# PADROES DE VELA
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 def detectar_padroes(candles):
     r = {"bear": [], "bull": []}
     if len(candles) < 3: return r
@@ -201,10 +157,6 @@ def detectar_padroes(candles):
         r["bull"].append("3 Verdes")
     return r
 
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# MOTOR DE CONFLUENCIAS
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 def analisar(preco, candles):
     if len(candles) < 30: return None, 0, []
     n   = len(candles)
@@ -232,24 +184,30 @@ def analisar(preco, candles):
     if sc >= MIN_SCORE and sc > sv: return "comprar", sc, cl
     return None, max(sv, sc), []
 
+def executar_ordem(cookie_str, direcao, preco):
+    direction = 1 if direcao == "comprar" else 2
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# EXECUCAO DA ORDEM
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-def executar_ordem(xsrf_token, direcao, preco):
-    direction     = 1 if direcao == "comprar" else 2
-    token_decoded = unquote(xsrf_token)
+    xsrf_encoded  = extrair_cookie(cookie_str, "XSRF-TOKEN")
+    xsrf_decoded  = unquote(xsrf_encoded)
+    laravel       = extrair_cookie(cookie_str, "laravel_session")
+
     headers = {
-        "User-Agent":   "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-        "Accept":       "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "Origin":       "https://vexinvest.com",
-        "Referer":      "https://vexinvest.com/traderoom",
-        "X-Xsrf-Token": token_decoded,
+        "User-Agent":      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36",
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "pt-BR,pt;q=0.9",
+        "Content-Type":    "application/json",
+        "Origin":          "https://vexinvest.com",
+        "Referer":         "https://vexinvest.com/traderoom",
+        "X-Xsrf-Token":    xsrf_decoded,
     }
-    cookies = {"XSRF-TOKEN": xsrf_token}
+
+    cookies = {
+        "XSRF-TOKEN":      xsrf_encoded,
+        "laravel_session": laravel,
+    }
+
     payload = {
-        "__token":          token_decoded,
+        "__token":          xsrf_decoded,
         "amount":           AMOUNT,
         "direction":        direction,
         "expiration":       EXPIRATION,
@@ -257,6 +215,7 @@ def executar_ordem(xsrf_token, direcao, preco):
         "symbol":           "BTCUSDT",
         "symbol_price":     int(preco),
     }
+
     try:
         r = requests.post(
             "https://vexinvest.com/publicapi/binary/transaction",
@@ -265,49 +224,50 @@ def executar_ordem(xsrf_token, direcao, preco):
             data = r.json()
             if data.get("status") == "success" or "id" in str(data):
                 return True, f"ORDEM {direcao.upper()} EXECUTADA!"
-            return False, f"RESPOSTA: {str(data)[:60]}"
+            return False, f"RESPOSTA: {str(data)[:80]}"
         elif r.status_code == 401:
             return False, "TOKEN EXPIRADO! Atualize."
-        return False, f"ERRO HTTP {r.status_code}"
+        elif r.status_code == 419:
+            return False, "ERRO 419 - Cookie invalido! Atualize."
+        return False, f"ERRO HTTP {r.status_code}: {r.text[:60]}"
     except Exception as e:
         return False, f"ERRO: {str(e)[:50]}"
 
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# LOOP PRINCIPAL
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-def rodar(xsrf_token):
-    ops       = 0
-    macro     = []
-    ult_min   = -1
+def rodar(cookie_str):
+    ops     = 0
+    macro   = []
+    ult_min = -1
 
     print(f"\n{NEGRITO}{VERDE}{'='*50}{RESET}")
-    print(f"{NEGRITO}{VERDE}  BOT SNIPER VEX - INICIADO{RESET}")
+    print(f"{NEGRITO}{VERDE}  BOT SNIPER VEX - INICIADO v2{RESET}")
     print(f"{NEGRITO}{VERDE}{'='*50}{RESET}")
     log(f"Simbolo: {SYMBOL} | Max ops/dia: {MAX_OPS_DIA}", AZUL)
     log(f"Confluencias minimas: {MIN_SCORE} | Intervalo: {INTERVALO}s", AZUL)
+
+    xsrf = extrair_cookie(cookie_str, "XSRF-TOKEN")
+    laravel = extrair_cookie(cookie_str, "laravel_session")
+    log(f"XSRF: {'OK' if xsrf else 'NAO ENCONTRADO'} | Laravel: {'OK' if laravel else 'NAO ENCONTRADO'}", AZUL)
     print()
 
     while True:
         try:
             if ops >= MAX_OPS_DIA:
-                log(f"LIMITE DIARIO ATINGIDO ({MAX_OPS_DIA} ops). Aguardando amanha...", AMARELO)
+                log(f"LIMITE DIARIO ({MAX_OPS_DIA} ops). Aguardando...", AMARELO)
                 time.sleep(3600)
                 continue
 
             preco = pegar_preco()
             if not preco:
-                log("Sem preco. Tentando novamente...", AMARELO)
+                log("Sem preco.", AMARELO)
                 time.sleep(INTERVALO)
                 continue
 
-            # Macro - 1 ponto por minuto
             m = datetime.now().minute
             if m != ult_min:
                 macro.append(preco)
                 if len(macro) > 60: macro.pop(0)
                 ult_min = m
-                log(f"MACRO: {preco:,.2f} | {len(macro)}/60min coletados", AZUL)
+                log(f"MACRO: {preco:,.2f} | {len(macro)}/60min", AZUL)
 
             candles = pegar_candles(120)
             if not candles:
@@ -318,55 +278,38 @@ def rodar(xsrf_token):
             sk = calc_stoch(candles)
             sinal, score, razoes = analisar(preco, candles)
 
-            # Status a cada ciclo
-            status = f"Preco: {preco:,.2f} | RSI: {rv} | Stoch: {sk} | Score: {score} | Ops: {ops}/{MAX_OPS_DIA}"
-            print(f"\r{AZUL}{status}{RESET}", end="", flush=True)
+            print(f"\r{AZUL}Preco: {preco:,.2f} | RSI: {rv} | Stoch: {sk} | Score: {score} | Ops: {ops}/{MAX_OPS_DIA}{RESET}", end="", flush=True)
 
             if sinal:
-                print()  # quebra linha do status
+                print()
                 cor = VERM if sinal == "vender" else VERDE
                 log(f"SINAL: {sinal.upper()} | Score: {score} | {' | '.join(razoes)}", cor)
-
-                ok, msg = executar_ordem(xsrf_token, sinal, preco)
-
+                ok, msg = executar_ordem(cookie_str, sinal, preco)
+                log(msg, VERDE if ok else VERM)
                 if ok:
                     ops += 1
-                    log(f"{msg} | Total hoje: {ops}/{MAX_OPS_DIA}", VERDE)
-                else:
-                    log(msg, VERM)
-                    if "expirado" in msg.lower():
-                        log("Bot pausado. Atualize o token e reinicie.", VERM)
-                        break
+                elif "Atualize" in msg:
+                    log("Reinicie o bot com cookie novo!", VERM)
+                    break
 
             time.sleep(INTERVALO)
 
         except KeyboardInterrupt:
             print()
-            log("Bot encerrado pelo usuario.", AMARELO)
+            log("Bot encerrado.", AMARELO)
             break
         except Exception as e:
             log(f"Erro: {str(e)[:60]}", VERM)
             time.sleep(10)
 
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# ENTRADA
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 if __name__ == "__main__":
     print(f"{NEGRITO}{AZUL}")
-    print("  â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
-    print("  â•‘      BOT SNIPER VEX - TERMINAL      â•‘")
-    print("  â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+    print("  BOT SNIPER VEX v2 - TERMINAL")
     print(f"{RESET}")
-    print("Para pegar o token:")
-    print("1. Abre o Lemur e loga na VexInveste")
-    print("2. DevTools > Console > cola:")
-    print("   document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1]")
-    print("3. Copia o resultado e cola abaixo\n")
-
-    token = input("Cole o XSRF-TOKEN aqui: ").strip()
-
-    if len(token) < 20:
-        print(f"{VERM}Token invalido!{RESET}")
+    print("Cole o resultado de: document.cookie")
+    print("(no console do Lemur na VexInveste)\n")
+    cookie = input("Cole o cookie completo aqui: ").strip()
+    if len(cookie) < 20:
+        print(f"{VERM}Cookie invalido!{RESET}")
     else:
-        rodar(token)
+        rodar(cookie)
