@@ -1,0 +1,372 @@
+"""
+BOT SNIPER VEX â€” VERSAO TERMINAL
+Roda no Ubuntu/Termux via tmux
+Sem interface grafica â€” 100% terminal
+
+COMO USAR:
+1. Abre o Lemur, loga na VexInveste
+2. No console DevTools cola:
+   document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1]
+3. Copia o token
+4. No terminal cola:
+   python3 bot_terminal.py
+5. Cola o token quando pedir
+6. Bot liga sozinho
+
+PARA RODAR EM BACKGROUND:
+   tmux new -s bot
+   python3 bot_terminal.py
+   Ctrl+B depois D  (sai sem parar)
+   tmux attach -t bot  (para voltar)
+"""
+
+import threading
+import requests
+import numpy as np
+import time
+from datetime import datetime
+from urllib.parse import unquote
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# CONFIGURACOES
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+SYMBOL      = "BTCUSDT"
+ACCOUNT_ID  = 7710
+AMOUNT      = 500
+EXPIRATION  = 1
+MAX_OPS_DIA = 6
+MIN_SCORE   = 3
+INTERVALO   = 5
+
+# Cores no terminal
+VERDE   = "\033[92m"
+VERM    = "\033[91m"
+AMARELO = "\033[93m"
+AZUL    = "\033[94m"
+RESET   = "\033[0m"
+NEGRITO = "\033[1m"
+
+
+def log(msg, cor=RESET):
+    agora = datetime.now().strftime("%H:%M:%S")
+    print(f"{cor}[{agora}] {msg}{RESET}")
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# DADOS DE MERCADO
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def pegar_preco():
+    try:
+        r = requests.get(
+            f"https://api.binance.com/api/v3/ticker/price?symbol={SYMBOL}",
+            timeout=4)
+        return float(r.json()["price"])
+    except:
+        try:
+            r = requests.get(
+                "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT",
+                timeout=4)
+            return float(r.json()["data"]["price"])
+        except:
+            return None
+
+
+def pegar_candles(limit=120):
+    try:
+        r = requests.get(
+            f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval=1m&limit={limit}",
+            timeout=5)
+        return [{"open": float(c[1]), "high": float(c[2]),
+                 "low":  float(c[3]), "close": float(c[4])} for c in r.json()]
+    except:
+        return []
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# INDICADORES
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def calc_rsi(candles, period=14):
+    if len(candles) < period + 1: return 50.0
+    closes = [c["close"] for c in candles]
+    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    gains  = [d if d > 0 else 0 for d in deltas[-period:]]
+    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    ag = sum(gains) / period
+    al = sum(losses) / period
+    if al == 0: return 100.0
+    return round(100 - (100 / (1 + ag / al)), 1)
+
+
+def calc_stoch(candles, k=14):
+    if len(candles) < k: return 50.0
+    highs = [c["high"] for c in candles[-k:]]
+    lows  = [c["low"]  for c in candles[-k:]]
+    close = candles[-1]["close"]
+    hmax  = max(highs); lmin = min(lows)
+    if hmax == lmin: return 50.0
+    return round(((close - lmin) / (hmax - lmin)) * 100, 1)
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ORDER BLOCKS
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def detectar_obs(candles):
+    bull, bear = [], []
+    for i in range(2, len(candles) - 5):
+        c   = candles[i]
+        fut = candles[i+1:i+6]
+        fmax = max(x["high"] for x in fut)
+        fmin = min(x["low"]  for x in fut)
+        if c["close"] < c["open"]:
+            move = (fmax - c["high"]) / c["high"]
+            if move > 0.003:
+                bull.append({"topo": c["open"], "fundo": c["close"]})
+        if c["close"] > c["open"]:
+            move = (c["low"] - fmin) / c["low"]
+            if move > 0.003:
+                bear.append({"topo": c["close"], "fundo": c["open"]})
+    return {"bull": bull[-4:], "bear": bear[-4:]}
+
+
+def em_ob(preco, obs, tol=0.001):
+    for ob in obs:
+        if ob["fundo"] * (1-tol) <= preco <= ob["topo"] * (1+tol):
+            return True
+    return False
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# LINHAS DE TENDENCIA
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def pivot_highs(candles, w=5):
+    pts = []
+    for i in range(w, len(candles)-w):
+        h = candles[i]["high"]
+        if all(h >= candles[i-j]["high"] for j in range(1,w+1)) and \
+           all(h >= candles[i+j]["high"] for j in range(1,w+1)):
+            pts.append((i, h))
+    return pts
+
+
+def pivot_lows(candles, w=5):
+    pts = []
+    for i in range(w, len(candles)-w):
+        l = candles[i]["low"]
+        if all(l <= candles[i-j]["low"] for j in range(1,w+1)) and \
+           all(l <= candles[i+j]["low"] for j in range(1,w+1)):
+            pts.append((i, l))
+    return pts
+
+
+def linha_tendencia(pontos, n):
+    if len(pontos) < 2: return None, None
+    pts = pontos[-3:]
+    xs  = np.array([p[0] for p in pts], dtype=float)
+    ys  = np.array([p[1] for p in pts], dtype=float)
+    c   = np.polyfit(xs, ys, 1)
+    return c[0] * n + c[1], c[0]
+
+
+def tocando(preco, valor, tol=0.0015):
+    if valor is None: return False
+    return abs(preco - valor) / valor <= tol
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# PADROES DE VELA
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def detectar_padroes(candles):
+    r = {"bear": [], "bull": []}
+    if len(candles) < 3: return r
+    c0, c1, c2 = candles[-1], candles[-2], candles[-3]
+    corpo = abs(c0["close"] - c0["open"])
+    sup   = c0["high"] - max(c0["open"], c0["close"])
+    sdn   = min(c0["open"], c0["close"]) - c0["low"]
+    rng   = c0["high"] - c0["low"] or 0.0001
+    if corpo / rng < 0.1:
+        r["bear"].append("Doji"); r["bull"].append("Doji")
+    if corpo > 0 and sup > corpo * 2:
+        r["bear"].append("Shooting Star")
+    if corpo > 0 and sdn > corpo * 2:
+        r["bull"].append("Hammer")
+    if (c0["close"] < c0["open"] and c1["close"] > c1["open"] and
+            c0["open"] >= c1["close"] and c0["close"] <= c1["open"]):
+        r["bear"].append("Bearish Engulfing")
+    if (c0["close"] > c0["open"] and c1["close"] < c1["open"] and
+            c0["open"] <= c1["close"] and c0["close"] >= c1["open"]):
+        r["bull"].append("Bullish Engulfing")
+    if all(c["close"] < c["open"] for c in [c0,c1,c2]):
+        r["bear"].append("3 Vermelhas")
+    if all(c["close"] > c["open"] for c in [c0,c1,c2]):
+        r["bull"].append("3 Verdes")
+    return r
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# MOTOR DE CONFLUENCIAS
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def analisar(preco, candles):
+    if len(candles) < 30: return None, 0, []
+    n   = len(candles)
+    obs = detectar_obs(candles)
+    pat = detectar_padroes(candles)
+    rv  = calc_rsi(candles)
+    sk  = calc_stoch(candles)
+    ltb, ltb_inc = linha_tendencia(pivot_highs(candles), n)
+    lta, lta_inc = linha_tendencia(pivot_lows(candles),  n)
+    sv, sc = 0, 0
+    rl, cl = [], []
+    if em_ob(preco, obs["bear"]): sv += 2; rl.append("OB Bearish")
+    if em_ob(preco, obs["bull"]): sc += 2; cl.append("OB Bullish")
+    if ltb_inc and ltb_inc < 0 and tocando(preco, ltb):
+        sv += 2; rl.append(f"LTB {ltb:.1f}")
+    if lta_inc and lta_inc > 0 and tocando(preco, lta):
+        sc += 2; cl.append(f"LTA {lta:.1f}")
+    if rv >= 70: sv += 1; rl.append(f"RSI {rv}")
+    elif rv <= 30: sc += 1; cl.append(f"RSI {rv}")
+    if sk >= 80: sv += 1; rl.append(f"Stoch {sk}")
+    elif sk <= 20: sc += 1; cl.append(f"Stoch {sk}")
+    for p in pat["bear"]: sv += 1; rl.append(p)
+    for p in pat["bull"]: sc += 1; cl.append(p)
+    if sv >= MIN_SCORE and sv > sc: return "vender",  sv, rl
+    if sc >= MIN_SCORE and sc > sv: return "comprar", sc, cl
+    return None, max(sv, sc), []
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# EXECUCAO DA ORDEM
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def executar_ordem(xsrf_token, direcao, preco):
+    direction     = 1 if direcao == "comprar" else 2
+    token_decoded = unquote(xsrf_token)
+    headers = {
+        "User-Agent":   "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+        "Accept":       "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin":       "https://vexinvest.com",
+        "Referer":      "https://vexinvest.com/traderoom",
+        "X-Xsrf-Token": token_decoded,
+    }
+    cookies = {"XSRF-TOKEN": xsrf_token}
+    payload = {
+        "__token":          token_decoded,
+        "amount":           AMOUNT,
+        "direction":        direction,
+        "expiration":       EXPIRATION,
+        "selected_account": ACCOUNT_ID,
+        "symbol":           "BTCUSDT",
+        "symbol_price":     int(preco),
+    }
+    try:
+        r = requests.post(
+            "https://vexinvest.com/publicapi/binary/transaction",
+            headers=headers, cookies=cookies, json=payload, timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("status") == "success" or "id" in str(data):
+                return True, f"ORDEM {direcao.upper()} EXECUTADA!"
+            return False, f"RESPOSTA: {str(data)[:60]}"
+        elif r.status_code == 401:
+            return False, "TOKEN EXPIRADO! Atualize."
+        return False, f"ERRO HTTP {r.status_code}"
+    except Exception as e:
+        return False, f"ERRO: {str(e)[:50]}"
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# LOOP PRINCIPAL
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def rodar(xsrf_token):
+    ops       = 0
+    macro     = []
+    ult_min   = -1
+
+    print(f"\n{NEGRITO}{VERDE}{'='*50}{RESET}")
+    print(f"{NEGRITO}{VERDE}  BOT SNIPER VEX - INICIADO{RESET}")
+    print(f"{NEGRITO}{VERDE}{'='*50}{RESET}")
+    log(f"Simbolo: {SYMBOL} | Max ops/dia: {MAX_OPS_DIA}", AZUL)
+    log(f"Confluencias minimas: {MIN_SCORE} | Intervalo: {INTERVALO}s", AZUL)
+    print()
+
+    while True:
+        try:
+            if ops >= MAX_OPS_DIA:
+                log(f"LIMITE DIARIO ATINGIDO ({MAX_OPS_DIA} ops). Aguardando amanha...", AMARELO)
+                time.sleep(3600)
+                continue
+
+            preco = pegar_preco()
+            if not preco:
+                log("Sem preco. Tentando novamente...", AMARELO)
+                time.sleep(INTERVALO)
+                continue
+
+            # Macro - 1 ponto por minuto
+            m = datetime.now().minute
+            if m != ult_min:
+                macro.append(preco)
+                if len(macro) > 60: macro.pop(0)
+                ult_min = m
+                log(f"MACRO: {preco:,.2f} | {len(macro)}/60min coletados", AZUL)
+
+            candles = pegar_candles(120)
+            if not candles:
+                time.sleep(INTERVALO)
+                continue
+
+            rv = calc_rsi(candles)
+            sk = calc_stoch(candles)
+            sinal, score, razoes = analisar(preco, candles)
+
+            # Status a cada ciclo
+            status = f"Preco: {preco:,.2f} | RSI: {rv} | Stoch: {sk} | Score: {score} | Ops: {ops}/{MAX_OPS_DIA}"
+            print(f"\r{AZUL}{status}{RESET}", end="", flush=True)
+
+            if sinal:
+                print()  # quebra linha do status
+                cor = VERM if sinal == "vender" else VERDE
+                log(f"SINAL: {sinal.upper()} | Score: {score} | {' | '.join(razoes)}", cor)
+
+                ok, msg = executar_ordem(xsrf_token, sinal, preco)
+
+                if ok:
+                    ops += 1
+                    log(f"{msg} | Total hoje: {ops}/{MAX_OPS_DIA}", VERDE)
+                else:
+                    log(msg, VERM)
+                    if "expirado" in msg.lower():
+                        log("Bot pausado. Atualize o token e reinicie.", VERM)
+                        break
+
+            time.sleep(INTERVALO)
+
+        except KeyboardInterrupt:
+            print()
+            log("Bot encerrado pelo usuario.", AMARELO)
+            break
+        except Exception as e:
+            log(f"Erro: {str(e)[:60]}", VERM)
+            time.sleep(10)
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ENTRADA
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+if __name__ == "__main__":
+    print(f"{NEGRITO}{AZUL}")
+    print("  â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
+    print("  â•‘      BOT SNIPER VEX - TERMINAL      â•‘")
+    print("  â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+    print(f"{RESET}")
+    print("Para pegar o token:")
+    print("1. Abre o Lemur e loga na VexInveste")
+    print("2. DevTools > Console > cola:")
+    print("   document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1]")
+    print("3. Copia o resultado e cola abaixo\n")
+
+    token = input("Cole o XSRF-TOKEN aqui: ").strip()
+
+    if len(token) < 20:
+        print(f"{VERM}Token invalido!{RESET}")
+    else:
+        rodar(token)
